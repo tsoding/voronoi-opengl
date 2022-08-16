@@ -25,6 +25,7 @@ typedef struct {
 static Vector2 seed_positions[SEEDS_COUNT];
 static Vector4 seed_colors[SEEDS_COUNT];
 static Vector2 seed_velocities[SEEDS_COUNT];
+static double delta_time = 0.0f;
 
 void MessageCallback(GLenum source,
                      GLenum type,
@@ -203,6 +204,113 @@ void generate_random_seeds(void)
     }
 }
 
+float absf(float a) {
+    return a < 0 ? a * -1.0f : a;
+}
+
+float maxf(float a, float b) {
+    return a > b ? a : b;
+}
+
+float minf(float a, float b) {
+    return a < b ? a : b;
+}
+
+float clampf(float min, float max, float val) {
+    return maxf(min, minf(max, val));
+}
+
+Vector2 calculate_force_between_points(Vector2 p1, float mass1, Vector2 p2, float mass2) {
+    float dx = p1.x - p2.x;
+    float dy = p1.y - p2.y;
+
+    // For "real" gravity it should be dx*dx + dy*dy, but it looks
+    // better this way.
+    float distance = absf(dx) + absf(dy);
+
+    if (distance == 0)
+        return (Vector2) { 0.0f, 0.0f };
+
+    float force = (mass1 + mass2) / distance;
+
+    return (Vector2) {
+        .x = dx * force,
+        .y = dy * force
+    };
+}
+
+void update_positions(void) {
+    for (size_t i = 0; i < SEEDS_COUNT; ++i) {
+        float ax = 0.0f;
+        float ay = 0.0f;
+        for (size_t j = 0; j < SEEDS_COUNT; ++j) {
+            if (i == j)
+                continue;
+#define SEED_MASS -2.0f
+            Vector2 deltas = calculate_force_between_points(seed_positions[i],
+                                                            SEED_MASS,
+                                                            seed_positions[j],
+                                                            SEED_MASS);
+
+            ax -= deltas.x;
+            ay -= deltas.y;
+        }
+
+
+        Vector2 corners[] = {
+            (Vector2) {
+                .x = 0.0f,
+                .y = 0.0f
+            },
+                (Vector2) {
+                .x = 0.0f,
+                .y = (float) DEFAULT_SCREEN_HEIGHT
+            },
+                (Vector2) {
+                .x = DEFAULT_SCREEN_WIDTH,
+                .y = (float) DEFAULT_SCREEN_HEIGHT
+            },
+                (Vector2) {
+                .x = DEFAULT_SCREEN_WIDTH,
+                .y = 0.0f
+            }
+        };
+
+#define CORNERS_COUNT 4
+#define CORNER_MASS -30.0f
+
+        for (int c = 0; c < CORNERS_COUNT; ++c) {
+            Vector2 deltas = calculate_force_between_points(seed_positions[i],
+                                                            SEED_MASS,
+                                                            corners[c],
+                                                            CORNER_MASS);
+            ax += deltas.x;
+            ay += deltas.y;
+        }
+
+        seed_velocities[i].x += ax;
+        seed_velocities[i].y += ay;
+
+#define VELOCITY_CAP 300.0f
+
+        seed_velocities[i].x = clampf(-VELOCITY_CAP, VELOCITY_CAP, seed_velocities[i].x);
+        seed_velocities[i].y = clampf(-VELOCITY_CAP, VELOCITY_CAP, seed_velocities[i].y);
+
+        float x = seed_positions[i].x + seed_velocities[i].x*delta_time;
+        if (0 <= x && x <= DEFAULT_SCREEN_WIDTH) {
+            seed_positions[i].x = x;
+        } else {
+            seed_velocities[i].x *= -1;
+        }
+        float y = seed_positions[i].y + seed_velocities[i].y*delta_time;
+        if (0 <= y && y <= DEFAULT_SCREEN_HEIGHT) {
+            seed_positions[i].y = y;
+        } else {
+            seed_velocities[i].y *= -1;
+        }
+    }
+}
+
 int main(void)
 {
     generate_random_seeds();
@@ -304,7 +412,6 @@ int main(void)
     printf("u_seed = %d\n", u_seed);
 
     double prev_time = 0.0;
-    double delta_time = 0.0f;
 
     glUniform2f(u_resolution, DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT);
 
@@ -312,20 +419,8 @@ int main(void)
         glClearColor(0.25f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        for (size_t i = 0; i < SEEDS_COUNT; ++i) {
-            float x = seed_positions[i].x + seed_velocities[i].x*delta_time;
-            if (0 <= x && x <= DEFAULT_SCREEN_WIDTH) {
-                seed_positions[i].x = x;
-            } else {
-                seed_velocities[i].x *= -1;
-            }
-            float y = seed_positions[i].y + seed_velocities[i].y*delta_time;
-            if (0 <= y && y <= DEFAULT_SCREEN_HEIGHT) {
-                seed_positions[i].y = y;
-            } else {
-                seed_velocities[i].y *= -1;
-            }
-        }
+        update_positions();
+
         glBindBuffer(GL_ARRAY_BUFFER, positions_vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(seed_positions), seed_positions);
 
