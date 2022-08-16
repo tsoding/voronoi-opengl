@@ -220,12 +220,16 @@ float clampf(float min, float max, float val) {
     return maxf(min, minf(max, val));
 }
 
-Vector2 calculate_force_between_points(float x1, float y1, float mass1, float x2, float y2, float mass2) {
-    float distance = absf(x1 - x2) + absf(y1 - y2);
+Vector2 calculate_force_between_points(Vector2 p1, float mass1, Vector2 p2, float mass2) {
+    float dx = p1.x - p2.x;
+    float dy = p1.y - p2.y;
+
+    // For "real" gravity it should be dx*dx + dy*dy, but it looks
+    // better this way.
+    float distance = absf(dx) + absf(dy);
+
     if (distance == 0)
         return (Vector2) { 0.0f, 0.0f };
-    float dx = x1 - x2;
-    float dy = y1 - y2;
 
     float force = (mass1 + mass2) / distance;
 
@@ -243,11 +247,9 @@ void update_positions(void) {
             if (i == j)
                 continue;
 #define SEED_MASS -2.0f
-            Vector2 deltas = calculate_force_between_points(seed_positions[i].x,
-                                                            seed_positions[i].y,
+            Vector2 deltas = calculate_force_between_points(seed_positions[i],
                                                             SEED_MASS,
-                                                            seed_positions[j].x,
-                                                            seed_positions[j].y,
+                                                            seed_positions[j],
                                                             SEED_MASS);
 
             ax -= deltas.x;
@@ -275,25 +277,24 @@ void update_positions(void) {
         };
 
 #define CORNERS_COUNT 4
+#define CORNER_MASS -30.0f
+
         for (int c = 0; c < CORNERS_COUNT; ++c) {
-#define CORNER_MASS 30.0f
-            Vector2 deltas = calculate_force_between_points(seed_positions[i].x,
-                                                            seed_positions[i].y,
+            Vector2 deltas = calculate_force_between_points(seed_positions[i],
                                                             SEED_MASS,
-                                                            corners[c].x,
-                                                            corners[c].y,
+                                                            corners[c],
                                                             CORNER_MASS);
-            ax -= deltas.x;
-            ay -= deltas.y;
+            ax += deltas.x;
+            ay += deltas.y;
         }
 
         seed_velocities[i].x += ax;
         seed_velocities[i].y += ay;
 
-#define VELOCITY_CAP 500.0f
+#define VELOCITY_CAP 300.0f
 
-        seed_velocities[i].x = clampf(VELOCITY_CAP * -1.0f, VELOCITY_CAP, seed_velocities[i].x);
-        seed_velocities[i].y = clampf(VELOCITY_CAP * -1.0f, VELOCITY_CAP, seed_velocities[i].y);
+        seed_velocities[i].x = clampf(-VELOCITY_CAP, VELOCITY_CAP, seed_velocities[i].x);
+        seed_velocities[i].y = clampf(-VELOCITY_CAP, VELOCITY_CAP, seed_velocities[i].y);
 
         float x = seed_positions[i].x + seed_velocities[i].x*delta_time;
         if (0 <= x && x <= DEFAULT_SCREEN_WIDTH) {
