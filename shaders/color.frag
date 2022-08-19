@@ -9,7 +9,7 @@ in vec4 color;
 in vec2 seed;
 out vec4 out_color;
 
-#define SEED_MARKER_RADIUS 10
+#define SEED_MARKER_RADIUS 5
 #define SEED_MARKER_COLOR vec4(.1, .1, .1, 1)
 
 void main(void) {

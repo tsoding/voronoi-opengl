@@ -5,14 +5,32 @@
 #include <string.h>
 #include <math.h>
 
+#include <sys/stat.h>
+#include <sys/types.h>
+
 #define GLFW_INCLUDE_GLEXT
 #include <GLFW/glfw3.h>
 
 #include "glextloader.c"
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #define DEFAULT_SCREEN_WIDTH 1600
 #define DEFAULT_SCREEN_HEIGHT 900
-#define SEEDS_COUNT 10
+#define SEEDS_COUNT 500
+
+#define UNIMPLEMENTED(message) \
+    do { \
+        fprintf(stderr, "%s:%d: UNIMPLEMENTED: %s\n", __FILE__, __LINE__, message); \
+        exit(1); \
+    } while (0)
+
+#define UNREACHABLE(message) \
+    do { \
+        fprintf(stderr, "%s:%d: UNREACHABLE: %s\n", __FILE__, __LINE__, message); \
+        exit(1); \
+    } while (0)
 
 typedef struct {
     float x, y;
@@ -22,9 +40,17 @@ typedef struct {
     float x, y, z, w;
 } Vector4;
 
+enum Attrib {
+    ATTRIB_POS = 0,
+    ATTRIB_COLOR,
+    COUNT_ATTRIBS,
+};
+
 static Vector2 seed_positions[SEEDS_COUNT];
 static Vector4 seed_colors[SEEDS_COUNT];
 static Vector2 seed_velocities[SEEDS_COUNT];
+static GLuint vao;
+static GLuint vbos[COUNT_ATTRIBS];
 
 void MessageCallback(GLenum source,
                      GLenum type,
@@ -197,14 +223,113 @@ void generate_random_seeds(void)
         seed_colors[i].w = 1;
 
         float angle = rand_float()*2*M_PI;
-        float mag = lerpf(100, 500, rand_float());
+        float mag = lerpf(100, 200, rand_float());
         seed_velocities[i].x = cosf(angle)*mag;
         seed_velocities[i].y = sinf(angle)*mag;
     }
 }
 
-int main(void)
+void render_frame(double delta_time)
 {
+    glClearColor(0.25f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    for (size_t i = 0; i < SEEDS_COUNT; ++i) {
+        float x = seed_positions[i].x + seed_velocities[i].x*delta_time;
+        if (0 <= x && x <= DEFAULT_SCREEN_WIDTH) {
+            seed_positions[i].x = x;
+        } else {
+            seed_velocities[i].x *= -1;
+        }
+        float y = seed_positions[i].y + seed_velocities[i].y*delta_time;
+        if (0 <= y && y <= DEFAULT_SCREEN_HEIGHT) {
+            seed_positions[i].y = y;
+        } else {
+            seed_velocities[i].y *= -1;
+        }
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, vbos[ATTRIB_POS]);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(seed_positions), seed_positions);
+
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, SEEDS_COUNT);
+}
+
+void render_video_mode(GLFWwindow *window)
+{
+    const char *output_dir = "frames";
+
+    if (mkdir(output_dir, 0755) < 0 && errno != EEXIST) {
+        fprintf(stderr, "ERROR: could not create folder `%s`\n", output_dir);
+        exit(1);
+    }
+
+    static uint32_t frame_pixels[DEFAULT_SCREEN_HEIGHT][DEFAULT_SCREEN_WIDTH];
+    static char file_path[1024];
+
+    size_t fps = 60;
+    double delta_time = 1.0/fps;
+    double duration = 10.0;
+    size_t frames_count = floorf(duration/delta_time);
+
+    for (size_t i = 0; i < frames_count && !glfwWindowShouldClose(window); ++i) {
+        render_frame(delta_time);
+
+        glReadPixels(0,
+                     0,
+                     DEFAULT_SCREEN_WIDTH,
+                     DEFAULT_SCREEN_HEIGHT,
+                     GL_RGBA,
+                     GL_UNSIGNED_BYTE,
+                     frame_pixels);
+
+        snprintf(file_path, sizeof(file_path), "%s/frame-%03zu.png", output_dir, i);
+        if (!stbi_write_png(file_path, DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT, 4, frame_pixels, sizeof(uint32_t)*DEFAULT_SCREEN_WIDTH)) {
+            fprintf(stderr, "ERROR: could not save file %s\n", file_path);
+            exit(1);
+        }
+
+        printf("INFO: Rendered %zu/%zu frames\n", i + 1, frames_count);
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
+}
+
+void interactive_mode(GLFWwindow *window)
+{
+    double prev_time = 0.0;
+    double delta_time = 0.0f;
+
+    while (!glfwWindowShouldClose(window)) {
+        render_frame(delta_time);
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+
+        double cur_time = glfwGetTime();
+        delta_time = cur_time - prev_time;
+        prev_time = cur_time;
+    }
+}
+
+typedef enum {
+    MODE_INTERACTIVE,
+    MODE_RENDER_VIDEO,
+} Mode;
+
+int main(int argc, char **argv)
+{
+    Mode mode = MODE_INTERACTIVE;
+
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--video") == 0) {
+            mode = MODE_RENDER_VIDEO;
+        } else {
+            fprintf(stderr, "ERROR: unknown flag `%s`\n", argv[i]);
+            exit(1);
+        }
+    }
+
     generate_random_seeds();
 
     if (!glfwInit()) {
@@ -249,42 +374,39 @@ int main(void)
 
     glEnable(GL_DEPTH_TEST);
 
-    GLuint vao;
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
 
-    GLuint positions_vbo;
+    glGenBuffers(COUNT_ATTRIBS, vbos);
+
     {
-        glGenBuffers(1, &positions_vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, positions_vbo);
+        glGenBuffers(1, &vbos[ATTRIB_POS]);
+        glBindBuffer(GL_ARRAY_BUFFER, vbos[ATTRIB_POS]);
         glBufferData(GL_ARRAY_BUFFER, sizeof(seed_positions), seed_positions, GL_DYNAMIC_DRAW);
 
-#define VA_POS 0
-        glEnableVertexAttribArray(VA_POS);
-        glVertexAttribPointer(VA_POS,
+        glEnableVertexAttribArray(ATTRIB_POS);
+        glVertexAttribPointer(ATTRIB_POS,
                               2,
                               GL_FLOAT,
                               GL_FALSE,
                               0,
                               (void*)0);
-        glVertexAttribDivisor(VA_POS, 1);
+        glVertexAttribDivisor(ATTRIB_POS, 1);
     }
 
-    GLuint colors_vbo;
     {
-        glGenBuffers(1, &colors_vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, colors_vbo);
+        glGenBuffers(1, &vbos[ATTRIB_COLOR]);
+        glBindBuffer(GL_ARRAY_BUFFER, vbos[ATTRIB_COLOR]);
         glBufferData(GL_ARRAY_BUFFER, sizeof(seed_colors), seed_colors, GL_STATIC_DRAW);
 
-#define VA_COLOR 1
-        glEnableVertexAttribArray(VA_COLOR);
-        glVertexAttribPointer(VA_COLOR,
+        glEnableVertexAttribArray(ATTRIB_COLOR);
+        glVertexAttribPointer(ATTRIB_COLOR,
                               4,
                               GL_FLOAT,
                               GL_FALSE,
                               0,
                               (void*)0);
-        glVertexAttribDivisor(VA_COLOR, 1);
+        glVertexAttribDivisor(ATTRIB_COLOR, 1);
     }
 
     const char *vertex_file_path = "shaders/quad.vert";
@@ -295,48 +417,19 @@ int main(void)
     }
     glUseProgram(program);
 
+    // TODO: resize the canvas when the window is resized
     GLint u_resolution = glGetUniformLocation(program, "resolution");
-    GLint u_color = glGetUniformLocation(program, "color");
-    GLint u_seed = glGetUniformLocation(program, "seed");
-
-    printf("u_resolution = %d\n", u_resolution);
-    printf("u_color = %d\n", u_color);
-    printf("u_seed = %d\n", u_seed);
-
-    double prev_time = 0.0;
-    double delta_time = 0.0f;
-
     glUniform2f(u_resolution, DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT);
 
-    while (!glfwWindowShouldClose(window)) {
-        glClearColor(0.25f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        for (size_t i = 0; i < SEEDS_COUNT; ++i) {
-            float x = seed_positions[i].x + seed_velocities[i].x*delta_time;
-            if (0 <= x && x <= DEFAULT_SCREEN_WIDTH) {
-                seed_positions[i].x = x;
-            } else {
-                seed_velocities[i].x *= -1;
-            }
-            float y = seed_positions[i].y + seed_velocities[i].y*delta_time;
-            if (0 <= y && y <= DEFAULT_SCREEN_HEIGHT) {
-                seed_positions[i].y = y;
-            } else {
-                seed_velocities[i].y *= -1;
-            }
-        }
-        glBindBuffer(GL_ARRAY_BUFFER, positions_vbo);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(seed_positions), seed_positions);
-
-        glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, SEEDS_COUNT);
-
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-
-        double cur_time = glfwGetTime();
-        delta_time = cur_time - prev_time;
-        prev_time = cur_time;
+    switch (mode) {
+    case MODE_INTERACTIVE:
+        interactive_mode(window);
+        break;
+    case MODE_RENDER_VIDEO:
+        render_video_mode(window);
+        break;
+    default:
+        UNREACHABLE("Unexpected execution mode");
     }
 
     return 0;
