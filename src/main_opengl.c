@@ -18,7 +18,7 @@
 
 #define DEFAULT_SCREEN_WIDTH 1600
 #define DEFAULT_SCREEN_HEIGHT 900
-#define SEEDS_COUNT 500
+#define SEEDS_COUNT 20
 
 #define UNIMPLEMENTED(message) \
     do { \
