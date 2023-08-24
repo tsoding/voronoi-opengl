@@ -20,6 +20,13 @@
 #define DEFAULT_SCREEN_HEIGHT 900
 #define SEEDS_COUNT 20
 
+const int MARKER_RADIUS = 10;
+const int TWO_RADIUS_SQUARED = (MARKER_RADIUS + MARKER_RADIUS) * (MARKER_RADIUS + MARKER_RADIUS);
+const int MAX_X_POSITION = DEFAULT_SCREEN_WIDTH - MARKER_RADIUS;
+const int MIN_X_POSITION = MARKER_RADIUS;
+const int MAX_Y_POSITION = DEFAULT_SCREEN_HEIGHT- MARKER_RADIUS;
+const int MIN_Y_POSITION = MARKER_RADIUS;
+
 #define UNIMPLEMENTED(message) \
     do { \
         fprintf(stderr, "%s:%d: UNIMPLEMENTED: %s\n", __FILE__, __LINE__, message); \
@@ -215,8 +222,8 @@ float lerpf(float a, float b, float t)
 void generate_random_seeds(void)
 {
     for (size_t i = 0; i < SEEDS_COUNT; ++i) {
-        seed_positions[i].x = rand_float()*DEFAULT_SCREEN_WIDTH;
-        seed_positions[i].y = rand_float()*DEFAULT_SCREEN_HEIGHT;
+        seed_positions[i].x = rand_float()*(MAX_X_POSITION-MIN_X_POSITION) + MIN_X_POSITION;
+        seed_positions[i].y = rand_float()*(MAX_Y_POSITION-MIN_Y_POSITION) + MIN_Y_POSITION;
         seed_colors[i].x = rand_float();
         seed_colors[i].y = rand_float();
         seed_colors[i].z = rand_float();
@@ -229,6 +236,48 @@ void generate_random_seeds(void)
     }
 }
 
+int squared_distance(int cx, int cy, int x, int y)
+{
+    int dx = cx - x;
+    int dy = cy - y;
+    return dx*dx + dy*dy;
+}
+
+Vector2 substract_vectors(Vector2 a, Vector2 b)
+{
+    Vector2 c = {a.x - b.x, a.y - b.y};
+    return c;
+}
+
+Vector2 add_vectors(Vector2 a, Vector2 b)
+{
+    Vector2 c = {a.x + b.x, a.y + b.y};
+    return c;
+}
+
+Vector2 scale_vector(Vector2 a, float scalar)
+{
+    Vector2 c = {a.x*scalar, a.y*scalar};
+    return c;
+}
+
+float vector_norm(Vector2 a)
+{
+    return sqrt(a.x*a.x + a.y*a.y);
+}
+
+Vector2 normalize_vector(Vector2 a)
+{
+    float norm = vector_norm(a);
+    Vector2 b = {a.x/norm, a.y/norm};
+    return b;
+}
+
+float inner_product(Vector2 a, Vector2 b)
+{
+    return a.x*b.x + a.y*b.y;
+}
+
 void render_frame(double delta_time)
 {
     glClearColor(0.25f, 0.0f, 0.0f, 1.0f);
@@ -236,17 +285,48 @@ void render_frame(double delta_time)
 
     for (size_t i = 0; i < SEEDS_COUNT; ++i) {
         float x = seed_positions[i].x + seed_velocities[i].x*delta_time;
-        if (0 <= x && x <= DEFAULT_SCREEN_WIDTH) {
+        if (MIN_X_POSITION <= x && x <= MAX_X_POSITION) {
             seed_positions[i].x = x;
         } else {
             seed_velocities[i].x *= -1;
         }
         float y = seed_positions[i].y + seed_velocities[i].y*delta_time;
-        if (0 <= y && y <= DEFAULT_SCREEN_HEIGHT) {
+        if (MIN_Y_POSITION <= y && y <= MAX_Y_POSITION) {
             seed_positions[i].y = y;
         } else {
             seed_velocities[i].y *= -1;
         }
+
+
+        for (int i = 0; i < SEEDS_COUNT - 1; i++) {
+            for (int j = i + 1; j < SEEDS_COUNT; j++) {
+                if (squared_distance(seed_positions[i].x, seed_positions[i].y,
+                                     seed_positions[j].x, seed_positions[j].y) <= TWO_RADIUS_SQUARED) {
+                    float distance_between = sqrt(squared_distance(seed_positions[i].x, seed_positions[i].y, seed_positions[j].x, seed_positions[j].y));
+                    float overlap = MARKER_RADIUS + MARKER_RADIUS - distance_between;
+
+                    Vector2 direction_of_displacement = substract_vectors(seed_positions[i], seed_positions[j]);
+                    direction_of_displacement = normalize_vector(direction_of_displacement);
+
+                    seed_positions[i] = add_vectors(seed_positions[i], scale_vector(direction_of_displacement, overlap));
+                    seed_positions[j] = substract_vectors(seed_positions[j], scale_vector(direction_of_displacement, overlap));
+
+                    Vector2 tangent = {-direction_of_displacement.y, direction_of_displacement.x};
+
+                    float inner_tangent_1 = inner_product(seed_velocities[i], tangent);
+                    float inner_tangent_2 = inner_product(seed_velocities[j], tangent);
+
+                    float inner_norm_1 = inner_product(seed_velocities[i], direction_of_displacement);
+                    float inner_norm_2 = inner_product(seed_velocities[j], direction_of_displacement);
+
+                    seed_velocities[i] = add_vectors(scale_vector(tangent, inner_tangent_1), scale_vector(direction_of_displacement, inner_norm_2));
+                    seed_velocities[j] = add_vectors(scale_vector(tangent, inner_tangent_2), scale_vector(direction_of_displacement, inner_norm_1));
+
+                }
+            }
+        }
+
+
     }
     glBindBuffer(GL_ARRAY_BUFFER, vbos[ATTRIB_POS]);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(seed_positions), seed_positions);
@@ -420,6 +500,8 @@ int main(int argc, char **argv)
     // TODO: resize the canvas when the window is resized
     GLint u_resolution = glGetUniformLocation(program, "resolution");
     glUniform2f(u_resolution, DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT);
+    GLint u_marker_radius = glGetUniformLocation(program, "marker_radius");
+    glUniform1i(u_marker_radius, MARKER_RADIUS);
 
     switch (mode) {
     case MODE_INTERACTIVE:
